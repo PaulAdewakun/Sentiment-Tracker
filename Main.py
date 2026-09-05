@@ -86,6 +86,5 @@ def main():
     con.close()
     print("\nnDone pulling all data.")
 
-
-
-
+if __name__ == main:
+    main()
