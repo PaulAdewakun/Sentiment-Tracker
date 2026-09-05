@@ -22,7 +22,7 @@ SECONDS_BETWEEN_CALLS = 15
 ts = TimeSeries(key=API_KEY, output_format='json')
 
 # Function to create a SQLite database connection
-def Create_Table(conn):
+def create_table(conn):
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS daily_adjusted_prices(
@@ -40,10 +40,52 @@ def Create_Table(conn):
     )
     conn.commit()
 
+def insert_ticker_data(conn, ticker, daily_data):
+    rows = []
 
-"""
-# historical_data = historical price data, ts.get_daily_adjusted returns a tuple with the first element being the data and the second being metadata
-# meta_data = metadata about the data, such as the last refreshed date and the interval of the data
-historical_data, meta_data = ts.get_daily_adjusted(symbol='AAPL')
+    for date, value in daily_data.item():
+        rows.append((
+            ticker,
+            date,
+            float(value.get("1. open")),
+            float(value.get("2. high")),
+            float(value.get("3. low")),
+            float(value.get("4. close")),
+            float(value.get("5. adjusted close")),
+            float(value.get("6. volume")),
+            float(value.get("7. dividend amount")),
+            float(value.get("8. split coefficient")),
+        ))
+    conn.executemany("""
+    INSERT OR REPLACE INTO daily_adjusted_prices
+    (ticker, date, open, high, low, close, adjusted close, volume, dividend amount, split coefficient)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
+    """, rows)
+    conn.commit()
+    return len(rows)
 
-"""
+def main():
+    con = sqlite3.connect("financialData.db")
+    create_table(con)
+
+    for i, ticker in enumerate(TICKERS):
+        print(f"Pulling {ticker} ({i+1}/{len(TICKERS)})...")
+
+        try:
+            daily_data,_= ts.get_daily_adjusted(symbol=ticker, output='full')
+
+        except Exception as e:
+            print(f"Failed to pull {ticker}: {e}")
+
+        row_count = insert_ticker_data(con, ticker, daily_data)
+        print(f"Stored {row_count} rows for {ticker} in financialData.db")
+
+        if i < len(TICKERS)-1:
+            time.sleep(SECONDS_BETWEEN_CALLS)
+
+    con.close()
+    print("\nnDone pulling all data.")
+
+
+
+
