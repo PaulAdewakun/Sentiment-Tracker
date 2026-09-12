@@ -29,6 +29,8 @@ def create_table(conn):
         ticker              TEXT NOT NULL,
         date                TEXT NOT NULL,
         open                REAL,
+        high                REAL,
+        low                 REAL,
         close               REAL,
         adjusted_close      REAL,
         volume              INTEGER,
@@ -43,7 +45,7 @@ def create_table(conn):
 def insert_ticker_data(conn, ticker, daily_data):
     rows = []
 
-    for date, value in daily_data.item():
+    for date, value in daily_data.items():
         rows.append((
             ticker,
             date,
@@ -72,10 +74,11 @@ def main():
         print(f"Pulling {ticker} ({i+1}/{len(TICKERS)})...")
 
         try:
-            daily_data,_= ts.get_daily_adjusted(symbol=ticker, output='full')
+            daily_data,_= ts.get_daily_adjusted(symbol=ticker, outputsize='full')
 
         except Exception as e:
             print(f"Failed to pull {ticker}: {e}")
+            continue
 
         row_count = insert_ticker_data(con, ticker, daily_data)
         print(f"Stored {row_count} rows for {ticker} in financialData.db")
@@ -86,5 +89,5 @@ def main():
     con.close()
     print("\nnDone pulling all data.")
 
-if __name__ == main:
+if __name__ == __main__:
     main()
