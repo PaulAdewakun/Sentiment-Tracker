@@ -1,93 +1,109 @@
-# Below are the import statements for the necessary libraries. Make sure to install the required packages using pip if you haven't already.
-from alpha_vantage.timeseries import TimeSeries
+"""
+Pull daily adjusted price data for a curated basket of tickers using yfinance,
+and store it in a local SQLite database.
+
+Note: yfinance returns data as a pandas DataFrame internally — that's just how
+the library works, and unavoidable. This script still converts it to plain
+tuples before writing, so the actual database step stays pure sqlite3.
+
+Usage:
+    pip install yfinance
+    python Main.py
+"""
+
 import time
-import os
 import sqlite3
+import yfinance as yf
 
-# Establishing the API key for Alpha Vantage. Make sure to set your environment variable ALPHA_VANTAGE_API_KEY before running the script.
-API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")  # Load your API key from an environment variable for security
+# Curated basket of energy stock tickers in the GICS Energy sector
+TICKERS = ['SU', 'CNQ', 'IMO', 'SLB', 'XOM']
 
-# Error check to ensure the API key is present
-if not API_KEY:
-    raise ValueError("API key not found. Please set the ALPHA_VANTAGE_API_KEY environment variable.")
+# yfinance has no official rate limit like Alpha Vantage, but a short pause
+# between tickers is good practice to avoid being throttled for bulk requests.
+SECONDS_BETWEEN_CALLS = 2
 
-# Currated basket of energy stock tickers in the GICS Sector
-TICKERS = ['SU','CNQ','IMO','SLB','XOM']
 
-# A time delay of 15 seconds between API calls is set to comply with ALPHA VANTAGE's free tier limit of 5 calls/minute. 
-# This buffer was chosen as it offers a safe margin to avoid hitting the rate limit while accounting for any delays in response time from the API.
-SECONDS_BETWEEN_CALLS = 15
-
-# Creating a timeseries object, api key loaded in below
-ts = TimeSeries(key=API_KEY, output_format='json')
-
-# Function to create a SQLite database connection
 def create_table(conn):
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS daily_adjusted_prices(
-        ticker              TEXT NOT NULL,
-        date                TEXT NOT NULL,
-        open                REAL,
-        high                REAL,
-        low                 REAL,
-        close               REAL,
-        adjusted_close      REAL,
-        volume              INTEGER,
-        dividend_amount     REAL,
-        split_coefficient   REAL,
-        PRIMARY KEY(ticker, date)
+        CREATE TABLE IF NOT EXISTS daily_adjusted_prices (
+            ticker             TEXT    NOT NULL,
+            date               TEXT    NOT NULL,
+            open               REAL,
+            high               REAL,
+            low                REAL,
+            close              REAL,
+            adjusted_close     REAL,
+            volume             INTEGER,
+            dividend_amount    REAL,
+            split_coefficient  REAL,
+            PRIMARY KEY (ticker, date)
         )
         """
     )
     conn.commit()
 
-def insert_ticker_data(conn, ticker, daily_data):
+
+def insert_ticker_data(conn, ticker, history_df):
     rows = []
 
-    for date, value in daily_data.items():
+    for date, row in history_df.iterrows():
+        # yfinance uses 0 to mean "no split that day"; our schema (matching
+        # Alpha Vantage's convention) uses 1.0 to mean the same thing.
+        split_value = float(row["Stock Splits"]) if row["Stock Splits"] != 0 else 1.0
+
         rows.append((
             ticker,
-            date,
-            float(value.get("1. open")),
-            float(value.get("2. high")),
-            float(value.get("3. low")),
-            float(value.get("4. close")),
-            float(value.get("5. adjusted close")),
-            float(value.get("6. volume")),
-            float(value.get("7. dividend amount")),
-            float(value.get("8. split coefficient")),
+            date.strftime("%Y-%m-%d"),
+            float(row["Open"]),
+            float(row["High"]),
+            float(row["Low"]),
+            float(row["Close"]),
+            float(row["Adj Close"]),
+            int(row["Volume"]),
+            float(row["Dividends"]),
+            split_value,
         ))
-    conn.executemany("""
-    INSERT OR REPLACE INTO daily_adjusted_prices
-    (ticker, date, open, high, low, close, adjusted close, volume, dividend amount, split coefficient)
-    VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, rows)
+
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO daily_adjusted_prices
+            (ticker, date, open, high, low, close, adjusted_close,
+             volume, dividend_amount, split_coefficient)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
     conn.commit()
     return len(rows)
+
 
 def main():
     con = sqlite3.connect("financialData.db")
     create_table(con)
 
     for i, ticker in enumerate(TICKERS):
-        print(f"Pulling {ticker} ({i+1}/{len(TICKERS)})...")
+        print(f"Pulling {ticker} ({i + 1}/{len(TICKERS)})...")
 
         try:
-            daily_data,_= ts.get_daily_adjusted(symbol=ticker, outputsize='full')
-
+            history_df = yf.Ticker(ticker).history(
+                period="max", auto_adjust=False, actions=True
+            )
+            if history_df.empty:
+                raise ValueError("No data returned")
         except Exception as e:
             print(f"Failed to pull {ticker}: {e}")
             continue
 
-        row_count = insert_ticker_data(con, ticker, daily_data)
+        row_count = insert_ticker_data(con, ticker, history_df)
         print(f"Stored {row_count} rows for {ticker} in financialData.db")
 
-        if i < len(TICKERS)-1:
+        if i < len(TICKERS) - 1:
             time.sleep(SECONDS_BETWEEN_CALLS)
 
     con.close()
-    print("\nnDone pulling all data.")
+    print("\nDone pulling all data.")
 
-if __name__ == __main__:
+
+if __name__ == "__main__":
     main()
